@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>School Module Library</title>
+<!--
+SETUP (once):
+1. Supabase > SQL Editor: run setup.sql.
+2. Supabase > Authentication: turn OFF "Allow new users to sign up".
+3. Authentication > Users > Add user: create one account per student (confirm the email).
+4. Replace SUPABASE_URL and SUPABASE_KEY below (publishable key only, never the secret key).
+5. Upload this index.html to your GitHub repository.
+-->
+<style>
+:root{--ink:#17324d;--board:#1f3d36;--paper:#f6f7f9;--line:#d5dae1;--mark:#f2c230;--muted:#5a6675}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 system-ui,Segoe UI,Arial,sans-serif}
+header{background:var(--board);color:#fff;padding:18px 20px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+h1,h2{font-family:Georgia,"Times New Roman",serif;margin:0;line-height:1.25}
+h1{font-size:1.5rem;border-bottom:3px solid var(--mark);padding-bottom:2px}
+main{max-width:760px;margin:0 auto;padding:24px 20px 60px}
+[hidden]{display:none!important}
+label{display:block;font-weight:600;margin:14px 0 4px}
+input,textarea,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:4px;font:inherit;background:#fff}
+textarea{min-height:160px;resize:vertical}
+button{font:inherit;cursor:pointer;border-radius:4px;padding:9px 16px;border:1px solid var(--ink);background:var(--ink);color:#fff}
+button.alt{background:transparent;color:inherit;border-color:currentColor}
+header button.alt{color:#fff}
+button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible,.row:focus-visible{outline:3px solid var(--mark);outline-offset:2px}
+.bar{display:flex;gap:10px;margin-bottom:18px}
+.bar input{flex:1}
+.panel{background:#fff;border:1px solid var(--line);border-radius:4px;padding:6px 20px 20px;margin-bottom:22px}
+.row{display:grid;grid-template-columns:140px 1fr;gap:4px 16px;padding:14px 4px;border-top:1px solid var(--line);cursor:pointer}
+.row:hover{background:#eef1f5}
+.subj{font-weight:700;color:var(--board)}
+.row h2{font-size:1.1rem}
+.snip,.meta{color:var(--muted);font-size:.9rem;grid-column:2}
+.body{white-space:pre-wrap;background:#fff;border:1px solid var(--line);padding:18px;border-radius:4px;margin:14px 0}
+.msg{margin:10px 0 0;font-size:.95rem}
+.err{color:#a4242b}
+@media(max-width:560px){.row{grid-template-columns:1fr}.snip,.meta{grid-column:1}}
+</style>
+</head>
+<body>
+<header>
+  <h1>School Module Library</h1>
+  <div id="who" hidden><span id="email"></span> <button class="alt" id="logout">Log out</button></div>
+</header>
+<main>
+  <section id="loginView" class="panel" style="max-width:420px;margin:30px auto">
+    <h2 style="margin-top:18px">Log in</h2>
+    <p>Use the email and password your teacher gave you.</p>
+    <label for="em">Email</label><input id="em" type="email" autocomplete="username">
+    <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password">
+    <p><button id="loginBtn">Log in</button></p>
+    <p id="loginMsg" class="msg err"></p>
+  </section>
+
+  <section id="appView" hidden>
+    <div id="listView">
+      <div class="bar">
+        <input id="search" type="search" placeholder="Search by title or subject" aria-label="Search modules">
+        <button id="addToggle">Add module</button>
+      </div>
+      <div id="addBox" class="panel" hidden>
+        <h2 style="margin-top:18px">Add a module</h2>
+        <label for="t">Title</label><input id="t" maxlength="120">
+        <label for="s">Subject</label><input id="s" maxlength="60" placeholder="e.g. Programming 1">
+        <label for="c">Content</label><textarea id="c" maxlength="20000"></textarea>
+        <label for="l">Link (optional, starts with https://)</label><input id="l" maxlength="500">
+        <p><button id="save">Save module</button></p>
+        <p id="addMsg" class="msg"></p>
+      </div>
+      <div id="list"></div>
+    </div>
+    <article id="reader" hidden>
+      <button class="alt" id="back" style="color:var(--ink)">Back to all modules</button>
+      <h2 id="rt" style="margin-top:18px"></h2>
+      <div id="rm" class="meta"></div>
+      <div id="rb" class="body"></div>
+      <p id="rl"></p>
+      <button class="alt" id="del" style="color:#a4242b" hidden>Delete my module</button>
+    </article>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = "https://YOUR-PROJECT-ID.supabase.co";
+const SUPABASE_KEY = "sb_publishable_YOUR_KEY_HERE";
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = id => document.getElementById(id);
+let me = null, mods = [], open = null;
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+function safeUrl(u) {
+  try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; }
+  catch (e) { return null; }
+}
+const fmt = d => new Date(d).toLocaleDateString();
+
+async function refresh() {
+  const { data } = await db.auth.getSession();
+  me = data.session ? data.session.user : null;
+  $("loginView").hidden = !!me;
+  $("appView").hidden = !me;
+  $("who").hidden = !me;
+  if (me) { $("email").textContent = me.email; showList(); load(); }
+}
+
+async function load() {
+  const { data, error } = await db.from("modules")
+    .select("id,title,subject,content,link,user_id,created_at")
+    .order("created_at", { ascending: false });
+  if (error) { $("list").textContent = "Could not load modules: " + error.message; return; }
+  mods = data; render();
+}
+
+function render() {
+  const q = $("search").value.trim().toLowerCase();
+  const box = $("list"); box.replaceChildren();
+  const shown = mods.filter(m => (m.title + " " + m.subject).toLowerCase().includes(q));
+  if (!shown.length) { box.append(el("p", q ? "No modules match your search." : "No modules yet. Use Add module to post the first one.")); return; }
+  shown.forEach(m => {
+    const r = el("div", undefined, "row");
+    r.tabIndex = 0; r.setAttribute("role", "button");
+    r.append(el("div", m.subject, "subj"), el("h2", m.title));
+    r.append(el("div", m.content.slice(0, 110) + (m.content.length > 110 ? "..." : ""), "snip"));
+    r.append(el("div", "Added " + fmt(m.created_at), "meta"));
+    const go = () => openModule(m);
+    r.onclick = go; r.onkeydown = e => { if (e.key === "Enter") go(); };
+    box.append(r);
+  });
+}
+
+function openModule(m) {
+  open = m;
+  $("listView").hidden = true; $("reader").hidden = false;
+  $("rt").textContent = m.title;
+  $("rm").textContent = m.subject + " - added " + fmt(m.created_at);
+  $("rb").textContent = m.content;
+  const holder = $("rl"); holder.replaceChildren();
+  const href = m.link && safeUrl(m.link);
+  if (href) { const a = el("a", "Open attached link"); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; holder.append(a); }
+  $("del").hidden = m.user_id !== me.id;
+  window.scrollTo(0, 0);
+}
+function showList() { $("reader").hidden = true; $("listView").hidden = false; open = null; }
+
+$("loginBtn").onclick = async () => {
+  $("loginMsg").textContent = "";
+  const { error } = await db.auth.signInWithPassword({ email: $("em").value.trim(), password: $("pw").value });
+  if (error) { $("loginMsg").textContent = "Could not log in. Check your email and password."; return; }
+  $("pw").value = ""; refresh();
+};
+$("pw").onkeydown = e => { if (e.key === "Enter") $("loginBtn").click(); };
+$("logout").onclick = async () => { await db.auth.signOut(); mods = []; refresh(); };
+$("search").oninput = render;
+$("back").onclick = showList;
+$("addToggle").onclick = () => { $("addBox").hidden = !$("addBox").hidden; };
+
+$("save").onclick = async () => {
+  const msg = $("addMsg"); msg.className = "msg";
+  const title = $("t").value.trim(), subject = $("s").value.trim(), content = $("c").value.trim();
+  const raw = $("l").value.trim(), link = raw ? safeUrl(raw) : null;
+  if (!title || !subject || !content) { msg.className = "msg err"; msg.textContent = "Fill in title, subject and content."; return; }
+  if (raw && !link) { msg.className = "msg err"; msg.textContent = "The link must start with https://"; return; }
+  const { error } = await db.from("modules").insert({ title, subject, content, link });
+  if (error) { msg.className = "msg err"; msg.textContent = "Could not save: " + error.message; return; }
+  ["t", "s", "c", "l"].forEach(id => $(id).value = "");
+  msg.textContent = "Module saved."; $("addBox").hidden = true; load();
+};
+
+$("del").onclick = async () => {
+  if (!open || !confirm("Delete this module?")) return;
+  const { error } = await db.from("modules").delete().eq("id", open.id);
+  if (error) { alert("Could not delete: " + error.message); return; }
+  showList(); load();
+};
+
+refresh();
+</script>
+</body>
+</html>
